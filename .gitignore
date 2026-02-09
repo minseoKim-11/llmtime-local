@@ -1,14 +1,23 @@
+# Python / Jupyter
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
-outputs/
-precomputed_outputs/
-datasets/monash/
-checkpoints/
-.hf/
-*.pkl
-*.pt
-*.ckpt
-*.safetensors
-*.log
+Untitled*.ipynb
+
+# Secrets
 .env
+
+# Caches
+.hf/
+
+# Experiment artifacts
+outputs/
+checkpoints/
+*.log
+
+# Monash dataset (large)
+datasets/monash/
+monash.tar.gz
+
+# Local env dumps
+env_*.txt
