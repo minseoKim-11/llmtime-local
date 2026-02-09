@@ -227,20 +227,32 @@ def get_llmtime_predictions_data(train, test, model, settings, num_samples=10, t
 
     # transform input_arrs
     input_arrs = [train[i].values for i in range(len(train))]
-    transformed_input_arrs = np.array([scaler.transform(input_array) for input_array, scaler in zip(input_arrs, scalers)])
+    #transformed_input_arrs = np.array([scaler.transform(input_array) for input_array, scaler in zip(input_arrs, scalers)])
+    transformed_input_arrs = [scaler.transform(input_array) for input_array, scaler in zip(input_arrs, scalers)]
+
     # serialize input_arrs
     input_strs = [serialize_arr(scaled_input_arr, settings) for scaled_input_arr in transformed_input_arrs]
     # Truncate input_arrs to fit the maximum context length
     input_arrs, input_strs = zip(*[truncate_input(input_array, input_str, settings, model, test_len) for input_array, input_str in zip(input_arrs, input_strs)])
     
+    # [로그 추가] 전체 시계열 개수 확인
+    print(f"\n[LLMTime] Total series to process: {len(input_strs)}")
+    print(f"[LLMTime] Target prediction steps: {test_len}")
+
     steps = test_len
     samples = None
     medians = None
     completions_list = None
     if num_samples > 0:
+        # [로그 추가] 생성 시작 알림
+        print(f"[LLMTime] Starting generation (num_samples={num_samples}, temp={temp})...")
+
         preds, completions_list, input_strs = generate_predictions(completion_fn, input_strs, steps, settings, scalers,
                                                                     num_samples=num_samples, temp=temp, 
                                                                     parallel=parallel, **kwargs)
+        # [로그 추가] 생성 완료 알림
+        print(f"[LLMTime] Generation complete. Processing results...")
+        
         samples = [pd.DataFrame(preds[i], columns=test[i].index) for i in range(len(preds))]
         medians = [sample.median(axis=0) for sample in samples]
         samples = samples if len(samples) > 1 else samples[0]

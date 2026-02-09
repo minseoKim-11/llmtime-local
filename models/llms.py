@@ -6,10 +6,12 @@ from models.llama import tokenize_fn as llama_tokenize_fn
 from models.mistral import mistral_completion_fn, mistral_nll_fn
 from models.mistral import tokenize_fn as mistral_tokenize_fn
 # ollama 서버 함수 임포트 
-from .backends.ollama_api import ollama_completion_fn
+from models.backends.ollama_api import ollama_completion_fn as ollama_generate_completion_fn
+from models.backends.ollama_api import ollama_nll_fn
 from models.mistral_api import mistral_api_completion_fn, mistral_api_nll_fn
 from models.mistral_api import tokenize_fn as mistral_api_tokenize_fn
-
+# models/llms.py 상단
+from models import local_llama  # local_llama.py를 임포트
 
 import os
 DEFAULT_MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai/gpt-oss-20b")
@@ -36,9 +38,9 @@ completion_fns = {
     # 로컬용 oss 모델
     "openai/gpt-oss-20b": partial(gpt_completion_fn, model="openai/gpt-oss-20b"),
     # Ollama 서버용
-    'ollama/llama2': partial(ollama_completion_fn, model='llama2'),
-    'ollama/llama3': partial(ollama_completion_fn, model='llama3'),
-    'ollama/llama2:text': partial(ollama_api.ollama_completion_fn, model='llama2:text'),
+    # 'ollama/llama2': partial(ollama_completion_fn, model='llama2'),
+    # 'ollama/llama3': partial(ollama_completion_fn, model='llama3'),
+    'ollama/llama2:text': partial(ollama_generate_completion_fn, model='ollama/llama2:text'),
     'text-davinci-003': partial(gpt_completion_fn, model='text-davinci-003'),
     'gpt-4o-mini': partial(gpt_completion_fn, model='gpt-4o-mini'),
     'gpt-4': partial(gpt_completion_fn, model='gpt-4'),
@@ -88,7 +90,8 @@ nll_fns = {
     'llama-13b-chat': partial(llama_nll_fn, model='13b-chat'),
     'llama-70b-chat': partial(llama_nll_fn, model='70b-chat'),
     # 'ollama/llama2': ollama_nll_fn, 
-    # 'ollama/llama3': ollama_nll_fn, # 추가
+    # 'ollama/llama3': ollama_nll_fn, 
+    'ollama/llama2:text':  partial(ollama_nll_fn, model='ollama/llama2:text'),
 }
 
 # Optional: Tokenization function for each model, only needed if you want automatic input truncation.
@@ -101,7 +104,7 @@ nll_fns = {
 tokenization_fns = {
     'ollama/llama2': partial(gpt_tokenize_fn, model='gpt2'),
     'ollama/llama3': partial(gpt_tokenize_fn, model='gpt2'),
-    'ollama/llama2:text': partial(llama_tokenization_fn, model='hf-internal-testing/llama-tokenizer'),
+    'ollama/llama2:text': partial(gpt_tokenize_fn, model='gpt2'),
     'text-davinci-003': partial(gpt_tokenize_fn, model='text-davinci-003'),
     'gpt-3.5-turbo-instruct': partial(gpt_tokenize_fn, model='gpt-3.5-turbo-instruct'),
     'gpt-4o-mini': partial(gpt_tokenize_fn, model='gpt-4o-mini'),

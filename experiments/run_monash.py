@@ -56,7 +56,7 @@ models_to_run = [
 
 datasets_to_run = ["traffic_hourly", "weather"]
 
-max_history_len = 50
+#max_history_len = 50
 datasets = get_datasets()
 for dsname in datasets_to_run:
     print(f"Starting {dsname}")
@@ -65,7 +65,7 @@ for dsname in datasets_to_run:
     train = data[0]
     test  = data[1]
     
-    train = [x[-max_history_len:] for x in train]
+    #train = [x[-max_history_len:] for x in train]
     test  = [x[:24] for x in test]
     # API 를 위해 적은 코드라 다시 주석처리
     #test  = [x[-max_history_len:] for x in test]
@@ -98,7 +98,7 @@ for dsname in datasets_to_run:
                 alpha=h["alpha"],
                 beta=h["beta"],
                 basic=h["basic"],
-                parallel= parallel,
+                parallel= True,
             )
             # print(f"--- Debug: Steps received (Preds length): {len(preds['median'][0])} ---")
             try:
