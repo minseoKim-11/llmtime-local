@@ -3,13 +3,20 @@ from models.gpt import gpt_completion_fn, gpt_nll_fn
 from models.gpt import tokenize_fn as gpt_tokenize_fn
 from models.llama import llama_completion_fn, llama_nll_fn
 from models.llama import tokenize_fn as llama_tokenize_fn
-
 from models.mistral import mistral_completion_fn, mistral_nll_fn
 from models.mistral import tokenize_fn as mistral_tokenize_fn
-
+# ollama 서버 함수 임포트 
+from .backends.ollama_api import ollama_completion_fn
 from models.mistral_api import mistral_api_completion_fn, mistral_api_nll_fn
 from models.mistral_api import tokenize_fn as mistral_api_tokenize_fn
 
+
+import os
+DEFAULT_MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai/gpt-oss-20b")
+
+completion_fns = {
+    DEFAULT_MODEL: partial(gpt_completion_fn, model=DEFAULT_MODEL),
+}
 
 # Required: Text completion function for each model
 # -----------------------------------------------
@@ -26,7 +33,15 @@ from models.mistral_api import tokenize_fn as mistral_api_tokenize_fn
 # Returns:
 #   - list: Sampled completion strings from the model.
 completion_fns = {
+    # 로컬용 oss 모델
+    "openai/gpt-oss-20b": partial(gpt_completion_fn, model="openai/gpt-oss-20b"),
+    # Ollama 서버용
+    'ollama/llama2': partial(ollama_completion_fn, model='llama2'),
+    'ollama/llama3': partial(ollama_completion_fn, model='llama3'),
+    'ollama/llama2:text': partial(ollama_api.ollama_completion_fn, model='llama2:text'),
     'text-davinci-003': partial(gpt_completion_fn, model='text-davinci-003'),
+    'gpt-4o-mini': partial(gpt_completion_fn, model='gpt-4o-mini'),
+    'gpt-4': partial(gpt_completion_fn, model='gpt-4'),
     'gpt-4': partial(gpt_completion_fn, model='gpt-4'),
     'gpt-4-1106-preview':partial(gpt_completion_fn, model='gpt-4-1106-preview'),
     'gpt-3.5-turbo-instruct': partial(gpt_completion_fn, model='gpt-3.5-turbo-instruct'),
@@ -60,7 +75,7 @@ completion_fns = {
 # Returns:
 #   - float: Computed NLL per dimension for p(target_arr | input_arr).
 nll_fns = {
-    'text-davinci-003': partial(gpt_nll_fn, model='text-davinci-003'),
+    #'text-davinci-003': partial(gpt_nll_fn, model='text-davinci-003'),
     'mistral': partial(mistral_nll_fn, model='mistral'),
     'mistral-api-tiny': partial(mistral_api_nll_fn, model='mistral-tiny'),
     'mistral-api-small': partial(mistral_api_nll_fn, model='mistral-small'),
@@ -72,6 +87,8 @@ nll_fns = {
     'llama-7b-chat': partial(llama_nll_fn, model='7b-chat'),
     'llama-13b-chat': partial(llama_nll_fn, model='13b-chat'),
     'llama-70b-chat': partial(llama_nll_fn, model='70b-chat'),
+    # 'ollama/llama2': ollama_nll_fn, 
+    # 'ollama/llama3': ollama_nll_fn, # 추가
 }
 
 # Optional: Tokenization function for each model, only needed if you want automatic input truncation.
@@ -82,8 +99,12 @@ nll_fns = {
 # Returns:
 #   - token_ids (list): A list of token ids.
 tokenization_fns = {
+    'ollama/llama2': partial(gpt_tokenize_fn, model='gpt2'),
+    'ollama/llama3': partial(gpt_tokenize_fn, model='gpt2'),
+    'ollama/llama2:text': partial(llama_tokenization_fn, model='hf-internal-testing/llama-tokenizer'),
     'text-davinci-003': partial(gpt_tokenize_fn, model='text-davinci-003'),
     'gpt-3.5-turbo-instruct': partial(gpt_tokenize_fn, model='gpt-3.5-turbo-instruct'),
+    'gpt-4o-mini': partial(gpt_tokenize_fn, model='gpt-4o-mini'),
     'mistral': partial(mistral_tokenize_fn, model='mistral'),
     'mistral-api-tiny': partial(mistral_api_tokenize_fn, model='mistral-tiny'),
     'mistral-api-small': partial(mistral_api_tokenize_fn, model='mistral-small'),
@@ -98,6 +119,9 @@ tokenization_fns = {
 
 # Optional: Context lengths for each model, only needed if you want automatic input truncation.
 context_lengths = {
+    'ollama/llama2': 4096,
+    'ollama/llama3': 8192,
+    'ollama/llama2:text': 4096,
     'text-davinci-003': 4097,
     'gpt-3.5-turbo-instruct': 4097,
     'mistral-api-tiny': 4097,

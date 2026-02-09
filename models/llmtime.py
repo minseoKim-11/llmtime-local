@@ -128,6 +128,8 @@ def generate_predictions(
     max_concurrent=10,
     **kwargs
 ):
+    print(f"[TRACE generate_predictions] steps={steps}, STEP_MULTIPLIER={STEP_MULTIPLIER}, steps_to_model={steps*STEP_MULTIPLIER}")
+
     """
     Generate and process text completions from a language model for input time series.
 
@@ -160,7 +162,18 @@ def generate_predictions(
     else:
         completions_list = [complete(input_str) for input_str in tqdm(input_strs)]
     def completion_to_pred(completion, inv_transform): 
-        pred = handle_prediction(deserialize_str(completion, settings, ignore_last=False, steps=steps), expected_length=steps, strict=strict_handling)
+        if completion is None:
+            completion = ""
+        elif isinstance(completion, list):
+            completion = completion[-1] if completion else ""
+        else:
+            completion = str(completion)
+    
+        pred = handle_prediction(
+            deserialize_str(completion, settings, ignore_last=False, steps=steps),
+            expected_length=steps,
+            strict=strict_handling
+        )
         if pred is not None:
             return inv_transform(pred)
         else:

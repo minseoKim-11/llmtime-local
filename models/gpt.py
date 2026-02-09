@@ -1,137 +1,212 @@
-from data.serialize import serialize_arr, SerializerSettings
-import openai
+import os
+import json
+import math
+import re
 import tiktoken
 import numpy as np
-from jax import grad,vmap
+from openai import OpenAI
+from dotenv import load_dotenv
+from data.serialize import serialize_arr, SerializerSettings
+from jax import grad, vmap
 
+DOTENV_PATH = "/workspace/llmtime/.env"
 
-def tokenize_fn(str, model):
+def _client():
+    load_dotenv(dotenv_path=DOTENV_PATH, override=True)
+    api_key = os.getenv("OPENAI_API_KEY", "EMPTY")
+    base_url = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+
+    return OpenAI(api_key=api_key, base_url=base_url)
+
+def _is_finite(x: float) -> bool:
+    return isinstance(x, (int, float)) and math.isfinite(x)
+
+def _parse_final_json(text: str, steps: int):
     """
-    Retrieve the token IDs for a string for a specific GPT model.
-
-    Args:
-        str (list of str): str to be tokenized.
-        model (str): Name of the LLM model.
-
-    Returns:
-        list of int: List of corresponding token IDs.
+    기대 포맷(정확히 1줄):
+      FINAL_JSON: {"pred":[...]}
+    - 반드시 pred 길이가 steps와 같아야 함.
     """
-    encoding = tiktoken.encoding_for_model(model)
-    return encoding.encode(str)
+    # 마지막에 있는 FINAL_JSON 블록을 찾는다(가장 뒤에 나온 걸 쓰기 위해 finditer)
+    matches = list(re.finditer(r"FINAL_JSON:\s*(\{.*?\})\s*$", text.strip(), flags=re.DOTALL))
+    if not matches:
+        raise ValueError("No FINAL_JSON block found")
+
+    obj_str = matches[-1].group(1).strip()
+    obj = json.loads(obj_str)
+
+    if "pred" not in obj or not isinstance(obj["pred"], list):
+        raise ValueError("FINAL_JSON missing 'pred' list")
+
+    arr = obj["pred"]
+    if len(arr) != steps:
+        raise ValueError(f"pred length mismatch: {len(arr)} != {steps}")
+
+    out = [float(x) for x in arr]
+    if not all(_is_finite(x) for x in out):
+        raise ValueError("non-finite value in pred")
+    return out
+
+def _make_main_prompt(clean_input: str, int_steps: int) -> str:
+    return (
+        f"Write exactly one line.\n"
+        f"That line MUST start with: OUTPUT_LINE:\n"
+        f"After OUTPUT_LINE: write exactly {int_steps} integers separated by commas.\n"
+        f"No other text. No reasoning.\n"
+        f"Sequence: {clean_input}\n"
+    )
+
+def _make_repair_prompt(raw_text: str, int_steps: int) -> str:
+    return (
+        f"Extract the forecast from the text and output exactly ONE line.\n"
+        f"That line MUST be:\n"
+        f"OUTPUT_LINE: <{int_steps} integers separated by commas>\n"
+        f"No other text.\n"
+        f"Text:\n{raw_text}\n"
+    )
+
+
+def tokenize_fn(s: str, model: str):
+    try:
+        enc = tiktoken.encoding_for_model(model)
+    except Exception:
+        enc = tiktoken.get_encoding("cl100k_base")
+    return enc.encode(s)
 
 def get_allowed_ids(strs, model):
-    """
-    Retrieve the token IDs for a given list of strings for a specific GPT model.
+    try:
+        enc = tiktoken.encoding_for_model(model)
+    except Exception:
+        enc = tiktoken.get_encoding("cl100k_base")
 
-    Args:
-        strs (list of str): strs to be converted.
-        model (str): Name of the LLM model.
-
-    Returns:
-        list of int: List of corresponding token IDs.
-    """
-    encoding = tiktoken.encoding_for_model(model)
     ids = []
     for s in strs:
-        id = encoding.encode(s)
-        ids.extend(id)
+        ids.extend(enc.encode(s))
     return ids
+
+
+import re
 
 def gpt_completion_fn(model, input_str, steps, settings, num_samples, temp):
     """
-    Generate text completions from GPT using OpenAI's API.
-
-    Args:
-        model (str): Name of the GPT-3 model to use.
-        input_str (str): Serialized input time series data.
-        steps (int): Number of time steps to predict.
-        settings (SerializerSettings): Serialization settings.
-        num_samples (int): Number of completions to generate.
-        temp (float): Temperature for sampling.
-
-    Returns:
-        list of str: List of generated samples.
+    Regex 기반의 무적(Robust) 파싱 전략을 사용하는 완성형 함수입니다.
+    JSON 포맷을 지키지 않더라도 텍스트 속에 숫자만 있다면 낚아챕니다.
     """
-    avg_tokens_per_step = len(tokenize_fn(input_str, model)) / len(input_str.split(settings.time_sep))
-    # define logit bias to prevent GPT-3 from producing unwanted tokens
-    logit_bias = {}
-    allowed_tokens = [settings.bit_sep + str(i) for i in range(settings.base)] 
-    allowed_tokens += [settings.time_sep, settings.plus_sign, settings.minus_sign]
-    allowed_tokens = [t for t in allowed_tokens if len(t) > 0] # remove empty tokens like an implicit plus sign
-    if (model not in ['gpt-3.5-turbo','gpt-4','gpt-4-1106-preview']): # logit bias not supported for chat models
-        logit_bias = {id: 30 for id in get_allowed_ids(allowed_tokens, model)}
-    if model in ['gpt-3.5-turbo','gpt-4','gpt-4-1106-preview']:
-        chatgpt_sys_message = "You are a helpful assistant that performs time series predictions. The user will provide a sequence and you will predict the remaining sequence. The sequence is represented by decimal strings separated by commas."
-        extra_input = "Please continue the following sequence without producing any additional text. Do not say anything like 'the next terms in the sequence are', just return the numbers. Sequence:\n"
-        response = openai.ChatCompletion.create(
+    int_steps = int(float(steps))
+    # LLMTime의 시리얼라이저 설정을 따르되, 기본값은 공백입니다.
+    sep = settings.time_sep if hasattr(settings, 'time_sep') else ' '
+    
+    # 입력 문자열 정리
+    clean_input = input_str.replace(" ", "").strip()
+    if clean_input.endswith(","):
+        clean_input = clean_input[:-1]
+
+    # 시스템 메시지 및 토큰 상한 (충분히 크게 설정)
+    sys_msg = "You are a precise time series forecasting engine."
+    max_out_tokens = 2500 
+
+    client = _client()
+
+    def _call(messages, n):
+        return client.chat.completions.create(
             model=model,
-            messages=[
-                    {"role": "system", "content": chatgpt_sys_message},
-                    {"role": "user", "content": extra_input+input_str+settings.time_sep}
-                ],
-            max_tokens=int(avg_tokens_per_step*steps), 
+            messages=messages,
+            max_tokens=max_out_tokens,
             temperature=temp,
-            logit_bias=logit_bias,
-            n=num_samples,
+            n=n,
         )
-        return [choice.message.content for choice in response.choices]
-    else:
-        response = openai.Completion.create(
-            model=model,
-            prompt=input_str, 
-            max_tokens=int(avg_tokens_per_step*steps), 
-            temperature=temp,
-            logit_bias=logit_bias,
+
+    def _zero_fallback() -> str:
+        # 상위에서 split()이 실패하지 않도록 명확한 구분자로 0을 채웁니다.
+        return sep.join(["0"] * int_steps)
+
+    def _extract_numbers(text: str, expected_len: int) -> str:
+        # 1) OUTPUT_LINE: 이 포함된 줄만 가져오기
+        print("[TRACE] _extract_numbers: anchor-only mode")
+
+        m = re.search(r"(?m)^OUTPUT_LINE:\s*(.*)$", text)
+        if not m:
+            raise ValueError("No OUTPUT_LINE line found")
+    
+        line = m.group(1).strip()
+    
+        # 2) 정수만 허용
+        nums = re.findall(r"-?\d+", line)
+    
+        if len(nums) != expected_len:
+            raise ValueError(f"OUTPUT_LINE has {len(nums)} nums, expected {expected_len}")
+    
+        return sep.join(nums)
+
+
+    # 메인 프롬프트 생성 (생각할 시간을 주되 숫자를 명확히 요구)
+    user_msg = _make_main_prompt(clean_input, int_steps)
+    print(f"\n[DEBUG] FINAL USER MSG SENT TO SERVER:\n{user_msg}")
+
+    try:
+        resp = _call(
+            messages=[
+                {"role": "system", "content": sys_msg},
+                {"role": "user", "content": user_msg},
+            ],
             n=num_samples
         )
-        return [choice.text for choice in response.choices]
-    
-def gpt_nll_fn(model, input_arr, target_arr, settings:SerializerSettings, transform, count_seps=True, temp=1):
-    """
-    Calculate the Negative Log-Likelihood (NLL) per dimension of the target array according to the LLM.
+    except Exception as e:
+        print(f"[ERROR] API Call failed: {e}")
+        return [_zero_fallback()] * num_samples
 
-    Args:
-        model (str): Name of the LLM model to use.
-        input_arr (array-like): Input array (history).
-        target_arr (array-like): Ground target array (future).
-        settings (SerializerSettings): Serialization settings.
-        transform (callable): Transformation applied to the numerical values before serialization.
-        count_seps (bool, optional): Whether to account for separators in the calculation. Should be true for models that generate a variable number of digits. Defaults to True.
-        temp (float, optional): Temperature for sampling. Defaults to 1.
+    results = []
 
-    Returns:
-        float: Calculated NLL per dimension.
-    """
-    input_str = serialize_arr(vmap(transform)(input_arr), settings)
-    target_str = serialize_arr(vmap(transform)(target_arr), settings)
-    assert input_str.endswith(settings.time_sep), f'Input string must end with {settings.time_sep}, got {input_str}'
-    full_series = input_str + target_str
-    response = openai.Completion.create(model=model, prompt=full_series, logprobs=5, max_tokens=0, echo=True, temperature=temp)
-    #print(response['choices'][0])
-    logprobs = np.array(response['choices'][0].logprobs.token_logprobs, dtype=np.float32)
-    tokens = np.array(response['choices'][0].logprobs.tokens)
-    top5logprobs = response['choices'][0].logprobs.top_logprobs
-    seps = tokens==settings.time_sep
-    target_start = np.argmax(np.cumsum(seps)==len(input_arr)) + 1
-    logprobs = logprobs[target_start:]
-    tokens = tokens[target_start:]
-    top5logprobs = top5logprobs[target_start:]
-    seps = tokens==settings.time_sep
-    assert len(logprobs[seps]) == len(target_arr), f'There should be one separator per target. Got {len(logprobs[seps])} separators and {len(target_arr)} targets.'
-    # adjust logprobs by removing extraneous and renormalizing (see appendix of paper)
-    allowed_tokens = [settings.bit_sep + str(i) for i in range(settings.base)] 
-    allowed_tokens += [settings.time_sep, settings.plus_sign, settings.minus_sign, settings.bit_sep+settings.decimal_point]
-    allowed_tokens = {t for t in allowed_tokens if len(t) > 0}
-    p_extra = np.array([sum(np.exp(ll) for k,ll in top5logprobs[i].items() if not (k in allowed_tokens)) for i in range(len(top5logprobs))])
-    if settings.bit_sep == '':
-        p_extra = 0
-    adjusted_logprobs = logprobs - np.log(1-p_extra)
-    digits_bits = -adjusted_logprobs[~seps].sum()
-    seps_bits = -adjusted_logprobs[seps].sum()
-    BPD = digits_bits/len(target_arr)
-    if count_seps:
-        BPD += seps_bits/len(target_arr)
-    # log p(x) = log p(token) - log bin_width = log p(token) + prec * log base
-    transformed_nll = BPD - settings.prec*np.log(settings.base)
-    avg_logdet_dydx = np.log(vmap(grad(transform))(target_arr)).mean()
-    return transformed_nll-avg_logdet_dydx
+    for idx, c in enumerate(resp.choices):
+        try:
+            content = getattr(c.message, "content", "") or ""
+            reasoning = getattr(c.message, "reasoning_content", "") or ""
+            full_text = (content + "\n" + reasoning).strip()
+
+            print(f"\n[DEBUG] Raw Text[{idx}] Length: {len(full_text)}")
+            
+            # 1순위: 텍스트 전체에서 숫자 낚시 (가장 확률 높음)
+            try:
+                pred_str = _extract_numbers(full_text, int_steps)
+                print(f"[DEBUG] pred_str(head): {pred_str[:120]}")
+
+                results.append(pred_str)
+                print(f"[DEBUG] Choice[{idx}] Success via Regex Extraction")
+                continue
+            except Exception as re_e:
+                print(f"[WARN] Regex extraction failed: {re_e}")
+
+            # 2순위: 리페어 시도 (여기서도 숫자 추출 위주로)
+            repair_msg = _make_repair_prompt(full_text, int_steps)
+            try:
+                r_resp = _call(
+                    messages=[
+                        {"role": "system", "content": sys_msg},
+                        {"role": "user", "content": repair_msg},
+                    ],
+                    n=1
+                )
+                r_c = r_resp.choices[0]
+                r_text = (getattr(r_c.message, "content", "") or "") + "\n" + (getattr(r_c.message, "reasoning_content", "") or "")
+                
+                pred_str = _extract_numbers(r_text.strip(), int_steps)
+                results.append(pred_str)
+                print(f"[DEBUG] Choice[{idx}] Success via Repair Extraction")
+                continue
+            except Exception as r_e:
+                print(f"[ERROR] Repair failed: {r_e}")
+                results.append(_zero_fallback())
+
+        except Exception as e:
+            print(f"[ERROR] Fatal error in choice[{idx}]: {e}")
+            results.append(_zero_fallback())
+
+    # 리스트 길이 보정 (num_samples와 일치)
+    while len(results) < num_samples:
+        results.append(_zero_fallback())
+    results = results[:num_samples]
+
+    return results
+
+def gpt_nll_fn(*args, **kwargs):
+    raise NotImplementedError("Disabled for now (migration).")
