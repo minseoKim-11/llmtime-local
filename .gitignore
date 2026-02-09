@@ -21,3 +21,4 @@ monash.tar.gz
 
 # Local env dumps
 env_*.txt
+.env
