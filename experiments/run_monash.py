@@ -41,7 +41,7 @@ def is_gpt(model):
     return ("gpt" in model) or ("o1" in model) or ("o3" in model)
 
 # Specify the output directory for saving results
-output_dir = 'outputs/monash_mini'
+output_dir = 'outputs/monash'
 os.makedirs(output_dir, exist_ok=True)
 
 models_to_run = [
@@ -62,8 +62,8 @@ for dsname in datasets_to_run:
     print(f"Starting {dsname}")
     data = datasets[dsname]
     train, test = data
-    train = data[0][:10] 
-    test  = data[1][:10]
+    train = data[0]
+    test  = data[1]
     
     train = [x[-max_history_len:] for x in train]
     test  = [x[:24] for x in test]
@@ -84,7 +84,7 @@ for dsname in datasets_to_run:
         else:
             print(f"Starting {dsname} {model}")
         parallel = True if is_gpt(model) else False
-        num_samples = 10
+        num_samples = 20
         
         try:
             # hypers는 grid_iter로 만들지 말고 1개만 쓰는 걸 추천 (비용/시간 폭발 방지)
@@ -98,7 +98,7 @@ for dsname in datasets_to_run:
                 alpha=h["alpha"],
                 beta=h["beta"],
                 basic=h["basic"],
-                parallel=True,
+                parallel= parallel,
             )
             # print(f"--- Debug: Steps received (Preds length): {len(preds['median'][0])} ---")
             try:
