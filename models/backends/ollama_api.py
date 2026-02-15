@@ -2,9 +2,12 @@ import os
 import re
 import requests
 from typing import List
+from openai import OpenAI
 
-# 서버/포트는 환경변수로 관리 (기본값은 네가 쓰던 6007)
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://100.106.55.122:6007")
+def get_ollama_client():
+    # 환경 변수에서 가져오고, 없으면 기본값(비어있는 값) 사용
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    return OpenAI(base_url=base_url, api_key="ollama")
 
 # 숫자 추출 정규식 (소수/정수/부호)
 NUM_RE = re.compile(r"[-+]?(?:\d*\.\d+|\d+)")
