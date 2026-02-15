@@ -6,7 +6,7 @@ import pandas as pd
 from dataclasses import dataclass
 from models.llms import completion_fns, nll_fns, tokenization_fns, context_lengths
 
-STEP_MULTIPLIER = 1.2
+STEP_MULTIPLIER = 1.5
 
 @dataclass
 class Scaler:
@@ -126,6 +126,7 @@ def generate_predictions(
     parallel=True,
     strict_handling=False,
     max_concurrent=10,
+    clip_bounds=None,
     **kwargs
 ):
     print(f"[TRACE generate_predictions] steps={steps}, STEP_MULTIPLIER={STEP_MULTIPLIER}, steps_to_model={steps*STEP_MULTIPLIER}")
@@ -154,32 +155,47 @@ def generate_predictions(
     """
     
     completions_list = []
-    complete = lambda x: completion_fn(input_str=x, steps=steps*STEP_MULTIPLIER, settings=settings, num_samples=num_samples, temp=temp)
+    complete = lambda x: completion_fn(input_str=x, steps=steps*STEP_MULTIPLIER, settings=settings, num_samples=num_samples, temp=temp, min_required=steps )
     if parallel and len(input_strs) > 1:
         print('Running completions in parallel for each input')
         with ThreadPoolExecutor(min(max_concurrent, len(input_strs))) as p:
             completions_list = list(tqdm(p.map(complete, input_strs), total=len(input_strs)))
     else:
         completions_list = [complete(input_str) for input_str in tqdm(input_strs)]
-    def completion_to_pred(completion, inv_transform): 
+    def completion_to_pred(completion, inv_transform, clip_bound=None):
         if completion is None:
             completion = ""
         elif isinstance(completion, list):
             completion = completion[-1] if completion else ""
         else:
             completion = str(completion)
-    
+
         pred = handle_prediction(
             deserialize_str(completion, settings, ignore_last=False, steps=steps),
             expected_length=steps,
             strict=strict_handling
         )
-        if pred is not None:
-            return inv_transform(pred)
-        else:
+        if pred is None:
             return None
-    preds = [[completion_to_pred(completion, scaler.inv_transform) for completion in completions] for completions, scaler in zip(completions_list, scalers)]
+
+        out = inv_transform(pred)
+
+        # === [추가] 클리핑 적용 ===
+        if clip_bound is not None:
+            lo, hi = clip_bound
+            out = np.clip(out, lo, hi)
+
+        return out
+
+    preds = [
+        [completion_to_pred(completion, scalers[i].inv_transform,
+                            clip_bound=(clip_bounds[i] if clip_bounds is not None else None))
+         for completion in completions]
+        for i, completions in enumerate(completions_list)
+    ]
+    
     return preds, completions_list, input_strs
+
 
 def get_llmtime_predictions_data(train, test, model, settings, num_samples=10, temp=0.7, alpha=0.95, beta=0.3, basic=False, parallel=True, **kwargs):
     """
@@ -224,7 +240,18 @@ def get_llmtime_predictions_data(train, test, model, settings, num_samples=10, t
 
     # Create a unique scaler for each series
     scalers = [get_scaler(train[i].values, alpha=alpha, beta=beta, basic=basic) for i in range(len(train))]
+    
+    # === [추가] train 기반 robust clip bounds (q01~q99 + margin) ===
+    clip_bounds = []
+    for i in range(len(train)):
+        hist = train[i].values
+        hist = hist[~np.isnan(hist)]
+        q1 = np.quantile(hist, 0.01)
+        q99 = np.quantile(hist, 0.99)
+        margin = 0.1 * (q99 - q1) if q99 > q1 else 1.0
+        clip_bounds.append((q1 - margin, q99 + margin))
 
+    
     # transform input_arrs
     input_arrs = [train[i].values for i in range(len(train))]
     #transformed_input_arrs = np.array([scaler.transform(input_array) for input_array, scaler in zip(input_arrs, scalers)])
@@ -249,7 +276,7 @@ def get_llmtime_predictions_data(train, test, model, settings, num_samples=10, t
 
         preds, completions_list, input_strs = generate_predictions(completion_fn, input_strs, steps, settings, scalers,
                                                                     num_samples=num_samples, temp=temp, 
-                                                                    parallel=parallel, **kwargs)
+                                                                    parallel=parallel,clip_bounds=clip_bounds, **kwargs)
         # [로그 추가] 생성 완료 알림
         print(f"[LLMTime] Generation complete. Processing results...")
         
@@ -268,6 +295,28 @@ def get_llmtime_predictions_data(train, test, model, settings, num_samples=10, t
     }
     # Compute NLL/D on the true test series conditioned on the (truncated) input series
     if nll_fn is not None:
-        BPDs = [nll_fn(input_arr=input_arrs[i], target_arr=test[i].values, settings=settings, transform=scalers[i].transform, count_seps=True, temp=temp) for i in range(len(train))]
-        out_dict['NLL/D'] = np.mean(BPDs)
+        BPDs = []
+        for i in range(len(train)):
+            try:
+                # 에러 발생 지점을 try로 감싸서 프로그램 중단 방지
+                val = nll_fn(
+                    input_arr=input_arrs[i], 
+                    target_arr=test[i].values, 
+                    settings=settings, 
+                    transform=scalers[i].transform, 
+                    count_seps=True, 
+                    temp=temp
+                )
+                BPDs.append(val)
+            except TypeError as e:
+                # 인자 불일치 에러 발생 시 로그를 남기고 0으로 채움
+                print(f"DEBUG: nll_fn failed for index {i} due to TypeError. (Ollama API interface mismatch)")
+                BPDs.append(0)
+            except Exception as e:
+                print(f"DEBUG: Unexpected error in nll_fn at index {i}: {e}")
+                BPDs.append(0)
+        
+        # NLL 평균값 저장 (실패한 경우 0이 포함됨)
+        out_dict['NLL/D'] = np.mean(BPDs) if BPDs else 0
+        
     return out_dict

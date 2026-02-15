@@ -16,10 +16,6 @@ from models import local_llama  # local_llama.py를 임포트
 import os
 DEFAULT_MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai/gpt-oss-20b")
 
-completion_fns = {
-    DEFAULT_MODEL: partial(gpt_completion_fn, model=DEFAULT_MODEL),
-}
-
 # Required: Text completion function for each model
 # -----------------------------------------------
 # Each model is mapped to a function that samples text completions.
@@ -41,9 +37,10 @@ completion_fns = {
     # 'ollama/llama2': partial(ollama_completion_fn, model='llama2'),
     # 'ollama/llama3': partial(ollama_completion_fn, model='llama3'),
     'ollama/llama2:text': partial(ollama_generate_completion_fn, model='ollama/llama2:text'),
+    'ollama/llama2:13b': partial(ollama_generate_completion_fn, model='ollama/llama2:13b'),
+    'ollama/forecast': partial(ollama_generate_completion_fn, model='ollama/forecast'),
     'text-davinci-003': partial(gpt_completion_fn, model='text-davinci-003'),
     'gpt-4o-mini': partial(gpt_completion_fn, model='gpt-4o-mini'),
-    'gpt-4': partial(gpt_completion_fn, model='gpt-4'),
     'gpt-4': partial(gpt_completion_fn, model='gpt-4'),
     'gpt-4-1106-preview':partial(gpt_completion_fn, model='gpt-4-1106-preview'),
     'gpt-3.5-turbo-instruct': partial(gpt_completion_fn, model='gpt-3.5-turbo-instruct'),
@@ -82,7 +79,6 @@ nll_fns = {
     'mistral-api-tiny': partial(mistral_api_nll_fn, model='mistral-tiny'),
     'mistral-api-small': partial(mistral_api_nll_fn, model='mistral-small'),
     'mistral-api-medium': partial(mistral_api_nll_fn, model='mistral-medium'),
-    'llama-7b': partial(llama_completion_fn, model='7b'),
     'llama-7b': partial(llama_nll_fn, model='7b'),
     'llama-13b': partial(llama_nll_fn, model='13b'),
     'llama-70b': partial(llama_nll_fn, model='70b'),
@@ -92,6 +88,8 @@ nll_fns = {
     # 'ollama/llama2': ollama_nll_fn, 
     # 'ollama/llama3': ollama_nll_fn, 
     'ollama/llama2:text':  partial(ollama_nll_fn, model='ollama/llama2:text'),
+    'ollama/llama2:13b': partial(ollama_nll_fn, model='ollama/llama2:13b'),
+
 }
 
 # Optional: Tokenization function for each model, only needed if you want automatic input truncation.
@@ -105,6 +103,9 @@ tokenization_fns = {
     'ollama/llama2': partial(gpt_tokenize_fn, model='gpt2'),
     'ollama/llama3': partial(gpt_tokenize_fn, model='gpt2'),
     'ollama/llama2:text': partial(gpt_tokenize_fn, model='gpt2'),
+    'ollama/llama2:13b': partial(gpt_tokenize_fn, model='gpt2'),
+    'ollama/forecast': partial(gpt_tokenize_fn, model='gpt2'),
+    
     'text-davinci-003': partial(gpt_tokenize_fn, model='text-davinci-003'),
     'gpt-3.5-turbo-instruct': partial(gpt_tokenize_fn, model='gpt-3.5-turbo-instruct'),
     'gpt-4o-mini': partial(gpt_tokenize_fn, model='gpt-4o-mini'),
@@ -125,6 +126,8 @@ context_lengths = {
     'ollama/llama2': 4096,
     'ollama/llama3': 8192,
     'ollama/llama2:text': 4096,
+    'ollama/llama2:13b': 4096,
+    'ollama/forecast' : 4096,
     'text-davinci-003': 4097,
     'gpt-3.5-turbo-instruct': 4097,
     'mistral-api-tiny': 4097,

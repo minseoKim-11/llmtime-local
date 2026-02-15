@@ -18,18 +18,18 @@ gpt3_hypers = dict(
     settings=SerializerSettings(base=10, prec=3, signed=True, half_bin_correction=True),
 )
 
-# [수정] 논문 저자들이 추천하는 Default 설정값
+# 논문 저자들이 추천하는 Default 설정값
 llama_hypers = dict(
     temp=0.7,        # 논문에서는 보통 0.7~1.0 사이 사용 (Llama-3는 0.7 추천)
-    alpha=0.95,      # [중요] 논문 권장값 (기존 0.99 -> 0.95)
+    alpha=0.99,      # [중요] 논문 권장값 
     beta=0.3,        # [중요] 논문 권장값 (기존 0.3)
     basic=False,     # [중요] 데이터가 0 대칭(Sine파 등)이 아니면 False
     settings=SerializerSettings(base=10, prec=3, signed=True, half_bin_correction=True),
 )
 
 model_hypers = {
-    "ollama/llama2:text": {
-        "model": "ollama/llama2:text", 
+    "ollama/forecast": {
+        "model": "ollama/forecast", 
         **llama_hypers
     }
 }
@@ -41,11 +41,11 @@ def is_gpt(model):
     return ("gpt" in model) or ("o1" in model) or ("o3" in model)
 
 # Specify the output directory for saving results
-output_dir = 'outputs/monash'
+output_dir = 'outputs/monash_mini'
 os.makedirs(output_dir, exist_ok=True)
 
 models_to_run = [
-   "ollama/llama2:text",
+   "ollama/forecast"
 ]
 
 #datasets_to_run =  [
@@ -54,7 +54,7 @@ models_to_run = [
 #    "nn5_weekly", "traffic_weekly", "saugeenday", "cif_2016", "bitcoin", "sunspot", "nn5_daily"
 #]
 
-datasets_to_run = ["traffic_hourly", "weather"]
+datasets_to_run = [ "weather"]
 
 #max_history_len = 50
 datasets = get_datasets()
@@ -64,9 +64,11 @@ for dsname in datasets_to_run:
     train, test = data
     train = data[0]
     test  = data[1]
+    test= test[:1]
+    train = train[:1]
     
     #train = [x[-max_history_len:] for x in train]
-    test  = [x[:24] for x in test]
+    test  = [x[:12] for x in test]
     # API 를 위해 적은 코드라 다시 주석처리
     #test  = [x[-max_history_len:] for x in test]
     
@@ -84,7 +86,7 @@ for dsname in datasets_to_run:
         else:
             print(f"Starting {dsname} {model}")
         parallel = True if is_gpt(model) else False
-        num_samples = 20
+        num_samples = 1
         
         try:
             # hypers는 grid_iter로 만들지 말고 1개만 쓰는 걸 추천 (비용/시간 폭발 방지)
@@ -98,7 +100,7 @@ for dsname in datasets_to_run:
                 alpha=h["alpha"],
                 beta=h["beta"],
                 basic=h["basic"],
-                parallel= True,
+                parallel= False,
             )
             # print(f"--- Debug: Steps received (Preds length): {len(preds['median'][0])} ---")
             try:
